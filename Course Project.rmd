@@ -1,0 +1,117 @@
+---
+output: html_document
+---
+Applying Machine Learning to Human Activity Recognition
+========================================================
+By Michael O'Flaherty   
+September 18th, 2014
+
+#### Background
+Human Activity Recognition (**HAR**) has emerged as a key research area by a pervasive research community. Devices such as Jawbone Up, Nike FuelBand, and Fitbit can be used to collect a large amount of personal activity data. People regularly quantify *how much* activity they do, but rarely quantify *how well* they do it. There are many applications for HAR: elderly monitoring, monitoring energy expenditure, weight-loss, and digital assistants for weightlifting. More information about these initiatives is available here: [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har#ixzz3DQkO6CJM)
+
+This project uses data from accelerometers on the belt, forearm, arm, and dumbell of six participants to develop a prediction model. These participants were asked to perform barbell lifts correctly and incorrectly in five different ways. See the section [Weight Lifting Exercise Dataset](http://groupware.les.inf.puc-rio.br/har) for details on the data set.
+
+#### Data Processing 
+
+```{r echo=FALSE, eval=TRUE}
+downloadDate <- date()
+```
+Data downloaded on **`r downloadDate`**:
+
+```{r echo=TRUE, eval=TRUE}
+if (!file.exists("data")) {
+        dir.create("data")
+}
+
+trainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(trainUrl, "./data/train.csv", method="curl")
+download.file(testUrl, "./data/test.csv", method="curl")
+
+train <- read.csv("./data/train.csv", header=TRUE)
+test <- read.csv("./data/test.csv", header=TRUE)
+```
+
+There are `r ncol(train)` variables in the data sets. The train data set contains `r format(nrow(train), big.mark=",", scientific=FALSE)` observations and the test data set contains `r format(nrow(test), big.mark=",", scientific=FALSE)` observations.
+
+#### Preparing the Data Set
+Some variables are not necessary and removed. The remaining variables are placed in new data sets called `processedTrain` and `processedTest`:
+```{r echo=TRUE, eval=TRUE}
+colsToRemove <- c("X", "user_name", "raw_timestamp_part_1", "new_window", 
+                  "num_window", "raw_timestamp_part_2", "cvtd_timestamp")
+processedTrain <- train[, !names(train) %in% colsToRemove]
+processedTest <- test[, !names(test) %in% colsToRemove]
+```
+We start with a total count of `r format(nrow(train), big.mark=",", scientific=FALSE)` rows in the `processedTest` data set. There are a large number of rows with all NA's. This code removes them:
+```{r echo=TRUE, eval=TRUE}
+naRow <- (rowSums(is.na(train)) == 0)
+processedTrain <- processedTrain[!naRow,]
+```
+We removed `r nrow(train[naRow == TRUE,])` rows of NA's with `r format(nrow(processedTrain), big.mark=",", scientific=FALSE)` rows remaining. No NA's are found in the test data set.  
+
+We want to weed out variables with low, unique values (less than a 20% sampling.) Also, we will check the skewness of the frequency distribution of each variable. If the ratio of most frequent value to the second most frequent value is greater than 20, the distribution of the predictor may be highly skewed. `Caret` has a function called `nearZeroVar` that we can use to remove those variables:
+```{r echo=TRUE, eval=TRUE}
+stopifnot(require(caret, quietly=TRUE))
+nzv <- nearZeroVar(processedTrain)
+processedTrain <- processedTrain[,-nzv]
+processedTest <- processedTest[,-nzv]
+```
+After this step, `r ncol(processedTrain)` variables remain.  
+
+Some predictive models are susceptible to multicollinearity (high correlations between predictors.) Other models, such as classification or regression trees, might be resistant to highly correlated predictors, but multicollinearity may
+negatively affect interpretability of the model. Either way, we will remove those variables that would weaken our model:
+```{r echo=TRUE, eval=TRUE}
+descrCorr <- cor(processedTrain[,sapply(processedTrain, is.numeric)]) # locate all numeric columns and coorelate
+highCorr <- findCorrelation(descrCorr, 0.90)
+processedTrain <- processedTrain[, -highCorr]
+processedTest <- processedTest[, -highCorr]
+```
+Data cleaning is complete. We have `r ncol(processedTrain)` variables remaining with no NA's in either data set. This was determined by running `str` and `summary` on each data set and reviewing the results. The remaining variables are shown here:
+```{r echo=TRUE, eval=TRUE}
+str(processedTrain)
+```
+
+#### Model Selection
+I chose the `Random Forest` model to predict the exercises performed. Random Forests are not as sensitive to outliers and overfitting.  
+
+#### Cross-Validation
+To test the accuracy of the proposed model, we create an independent test data set to perform cross-validation using a 60/40 split:
+```{r echo=TRUE, eval=TRUE}
+subset <- createDataPartition(y=processedTrain$classe, p=0.6, list=FALSE)
+processedTrain.trainSet <- processedTrain[subset, ]
+processedTrain.validationSet <- processedTrain[-subset, ]
+```
+Using the `Caret` package, we fit our model, make our prediction, and use a confusion matrix to check the results:
+```{r echo=TRUE, eval=TRUE}
+set.seed(777)
+fitRF <- train(classe~., method='rf', data=processedTrain.trainSet, trControl=trainControl(method="cv"))
+predVS <- predict(fitRF, processedTrain.validationSet)
+confusionMatrix(table(predVS, processedTrain.validationSet$classe))
+```
+The overall accuracy of this model on the cross-validation data set is **99.2%** with an expected out-of-sample error rate of **0.008%**. Details about this model are shown here:
+```{r echo=TRUE, eval=TRUE}
+fitRF
+plot(fitRF, metric="Kappa")
+resampleHist(fitRF)
+```
+  
+The 30 most important variables are shown here:
+```{r echo=TRUE, eval=TRUE}
+plot(varImp(fitRF, scale=FALSE), top=30)
+```
+
+#### Final Prediction
+We make the final prediction using the test data set:
+```{r echo=TRUE, eval=TRUE}
+predTest <- predict(fitRF, processedTest)
+```
+The results of the prediction are:
+```{r echo=TRUE, eval=TRUE}
+##  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
+##  B  A  B  A  A  E  D  B  A  A  B  C  B  A  E  E  A  B  B  B 
+```
+
+##### References 
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+Cited by 2 (Google Scholar) [http://groupware.les.inf.puc-rio.br/har#ixzz3DRGVsY37([http://groupware.les.inf.puc-rio.br/har#ixzz3DRGVsY37)
